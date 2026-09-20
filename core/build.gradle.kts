@@ -13,6 +13,13 @@ dependencies {
     compileOnly("me.clip:placeholderapi:2.12.3")
     compileOnly("com.github.GriefPrevention:GriefPrevention:18.0.0")
     compileOnly("com.intellectualsites.plotsquared:plotsquared-core:7.6.0")
+
+    testImplementation("io.papermc.paper:paper-api:26.3.build.+")
+    testImplementation(platform("org.junit:junit-bom:5.14.2"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testImplementation("org.mockito:mockito-core:5.20.0")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testRuntimeOnly("me.clip:placeholderapi:2.12.3") { isTransitive = false }
 }
 
 java {
@@ -22,6 +29,10 @@ java {
 
 tasks.compileJava {
     options.release = 16
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 publishing {

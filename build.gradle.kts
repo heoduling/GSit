@@ -29,29 +29,25 @@ java {
     disableAutoTargetJvm()
 }
 
+val reobfuscatedVersions = listOf(
+    "v1_17_1",
+    "v1_18", "v1_18_2",
+    "v1_19", "v1_19_1", "v1_19_3", "v1_19_4",
+    "v1_20", "v1_20_2", "v1_20_3", "v1_20_5",
+    "v1_21", "v1_21_2", "v1_21_4", "v1_21_5", "v1_21_6", "v1_21_9", "v1_21_11"
+)
+val mojmapVersions = listOf("v26_1", "v26_2", "v26_3")
+val supportedVersions = reobfuscatedVersions + mojmapVersions
+val targetVersion = providers.gradleProperty("targetVersion").orNull
+val selectedVersions = if(targetVersion == null) supportedVersions else listOf(targetVersion.also {
+    require(it in supportedVersions) { "Unsupported targetVersion: $it" }
+})
+
 dependencies {
     api(project(":core"))
-    api(project(":v1_17_1", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_18", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_18_2", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_19", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_19_1", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_19_3", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_19_4", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_20", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_20_2", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_20_3", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_20_5", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_21", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_21_2", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_21_4", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_21_5", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_21_6", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_21_9", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v1_21_11", io.papermc.paperweight.util.constants.REOBF_CONFIG))
-    api(project(":v26_1", "default"))
-    api(project(":v26_2", "default"))
-    api(project(":v26_3", "default"))
+    selectedVersions.forEach { version ->
+        api(project(":$version", if(version in mojmapVersions) "default" else io.papermc.paperweight.util.constants.REOBF_CONFIG))
+    }
 }
 
 tasks {
