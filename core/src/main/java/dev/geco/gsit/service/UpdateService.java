@@ -5,6 +5,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URL;
@@ -16,6 +17,7 @@ import java.util.logging.Level;
 
 public class UpdateService {
 
+    private static final int NETWORK_TIMEOUT_MILLIS = 3_000;
     private final String GITHUB_REMOTE_URL = "https://api.github.com/repos/gecolay/gsit/releases/latest";
     private final String MODRINTH_REMOTE_URL = "https://api.modrinth.com/v2/project/gsit/version";
     private final String SPIGOT_REMOTE_URL = "https://api.spigotmc.org/legacy/update.php?resource=62325";
@@ -52,15 +54,16 @@ public class UpdateService {
 
     private void getGitHubVersion(Consumer<String> versionConsumer) {
         gSitMain.getTaskService().run(() -> {
-            try(InputStream inputStream = new URL(GITHUB_REMOTE_URL).openStream(); BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
+            if(!gSitMain.isAcceptingOperations()) return;
+            try(InputStream inputStream = openConnection(GITHUB_REMOTE_URL).getInputStream(); BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
                 StringBuilder response = new StringBuilder();
                 String line;
                 while((line = reader.readLine()) != null) response.append(line);
                 String json = response.toString();
                 String tag = extractJsonValue(json, "tag_name");
-                if(tag != null && versionConsumer != null) versionConsumer.accept(tag);
+                if(gSitMain.isAcceptingOperations() && tag != null && versionConsumer != null) versionConsumer.accept(tag);
             } catch(Throwable e) {
-                if(e.getMessage().contains("50")) return;
+                if(e.getMessage() != null && e.getMessage().contains("50")) return;
                 gSitMain.getLogger().log(Level.WARNING, "Could not get github remote version!", e);
             }
         }, false);
@@ -68,8 +71,9 @@ public class UpdateService {
 
     private void getModrinthVersion(Consumer<String> versionConsumer) {
         gSitMain.getTaskService().run(() -> {
+            if(!gSitMain.isAcceptingOperations()) return;
             try {
-                URLConnection connection = new URL(MODRINTH_REMOTE_URL).openConnection();
+                URLConnection connection = openConnection(MODRINTH_REMOTE_URL);
                 connection.setRequestProperty("User-Agent", GSitMain.NAME + "/" + gSitMain.getDescription().getVersion());
                 try(InputStream inputStream = connection.getInputStream(); BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
                     StringBuilder response = new StringBuilder();
@@ -79,10 +83,10 @@ public class UpdateService {
                     String firstObject = extractFirstJsonObject(json);
                     if(firstObject == null) return;
                     String tag = extractJsonValue(firstObject, "version_number");
-                    if(tag != null && versionConsumer != null) versionConsumer.accept(tag);
+                    if(gSitMain.isAcceptingOperations() && tag != null && versionConsumer != null) versionConsumer.accept(tag);
                 }
             } catch(Throwable e) {
-                if(e.getMessage().contains("50")) return;
+                if(e.getMessage() != null && e.getMessage().contains("50")) return;
                 gSitMain.getLogger().log(Level.WARNING, "Could not get modrinth remote version!", e);
             }
         }, false);
@@ -90,10 +94,11 @@ public class UpdateService {
 
     private void getSpigotVersion(Consumer<String> versionConsumer) {
         gSitMain.getTaskService().run(() -> {
-            try(InputStream inputStream = new URL(SPIGOT_REMOTE_URL).openStream(); Scanner scanner = new Scanner(inputStream)) {
-                if(scanner.hasNext() && versionConsumer != null) versionConsumer.accept(scanner.next());
+            if(!gSitMain.isAcceptingOperations()) return;
+            try(InputStream inputStream = openConnection(SPIGOT_REMOTE_URL).getInputStream(); Scanner scanner = new Scanner(inputStream)) {
+                if(gSitMain.isAcceptingOperations() && scanner.hasNext() && versionConsumer != null) versionConsumer.accept(scanner.next());
             } catch(Throwable e) {
-                if(e.getMessage().contains("50")) return;
+                if(e.getMessage() != null && e.getMessage().contains("50")) return;
                 gSitMain.getLogger().log(Level.WARNING, "Could not get spigot remote version!", e);
             }
         }, false);
@@ -101,13 +106,21 @@ public class UpdateService {
 
     private void getPaperVersion(Consumer<String> versionConsumer) {
         gSitMain.getTaskService().run(() -> {
-            try(InputStream inputStream = new URL(PAPER_REMOTE_URL).openStream(); Scanner scanner = new Scanner(inputStream)) {
-                if(scanner.hasNext() && versionConsumer != null) versionConsumer.accept(scanner.next());
+            if(!gSitMain.isAcceptingOperations()) return;
+            try(InputStream inputStream = openConnection(PAPER_REMOTE_URL).getInputStream(); Scanner scanner = new Scanner(inputStream)) {
+                if(gSitMain.isAcceptingOperations() && scanner.hasNext() && versionConsumer != null) versionConsumer.accept(scanner.next());
             } catch(Throwable e) {
-                if(e.getMessage().contains("50")) return;
+                if(e.getMessage() != null && e.getMessage().contains("50")) return;
                 gSitMain.getLogger().log(Level.WARNING, "Could not get paper remote version!", e);
             }
         }, false);
+    }
+
+    private URLConnection openConnection(String url) throws IOException {
+        URLConnection connection = new URL(url).openConnection();
+        connection.setConnectTimeout(NETWORK_TIMEOUT_MILLIS);
+        connection.setReadTimeout(NETWORK_TIMEOUT_MILLIS);
+        return connection;
     }
 
     private String extractJsonValue(String json, String key) {

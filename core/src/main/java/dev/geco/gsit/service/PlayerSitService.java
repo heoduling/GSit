@@ -12,9 +12,11 @@ import org.bukkit.entity.Player;
 
 import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -26,7 +28,7 @@ public class PlayerSitService {
     private final int sitEntityStackCount;
     private final HashMap<UUID, AbstractMap.SimpleImmutableEntry<UUID, List<UUID>>> bottomToTopStacks = new HashMap<>();
     private final HashMap<UUID, AbstractMap.SimpleImmutableEntry<UUID, List<UUID>>> topToBottomStacks = new HashMap<>();
-    private final Set<Player> preventDismountStackPlayers = new HashSet<>();
+    private final Set<Player> preventDismountStackPlayers = Collections.synchronizedSet(new HashSet<>());
     private final HashMap<String, Long> spawnTimes = new HashMap<>();
     private int playerSitCount = 0;
     private long playerSitTime = 0;
@@ -40,19 +42,38 @@ public class PlayerSitService {
 
     public Set<Player> getPreventDismountStackPlayers() { return preventDismountStackPlayers; }
 
-    public boolean isPlayerInPlayerSitStack(Player player) { return bottomToTopStacks.containsKey(player.getUniqueId()) || topToBottomStacks.containsKey(player.getUniqueId()); }
+    public boolean isPlayerInPlayerSitStack(Player player) {
+        synchronized(bottomToTopStacks) {
+            return bottomToTopStacks.containsKey(player.getUniqueId()) || topToBottomStacks.containsKey(player.getUniqueId());
+        }
+    }
+
+    public boolean hasPlayerSitStacks() { synchronized(bottomToTopStacks) { return !bottomToTopStacks.isEmpty() || !topToBottomStacks.isEmpty(); } }
+
+    public Map<UUID, List<UUID>> getBottomMarkerIdsSnapshot() {
+        synchronized(bottomToTopStacks) {
+            Map<UUID, List<UUID>> snapshot = new HashMap<>();
+            bottomToTopStacks.forEach((bottomId, stack) -> snapshot.put(bottomId, List.copyOf(stack.getValue())));
+            return snapshot;
+        }
+    }
 
     public void removeAllPlayerSitStacks() {
-        for(UUID topPlayerId : new ArrayList<>(topToBottomStacks.keySet())) {
+        List<UUID> topPlayerIds;
+        synchronized(bottomToTopStacks) { topPlayerIds = new ArrayList<>(topToBottomStacks.keySet()); }
+        for(UUID topPlayerId : topPlayerIds) {
             Player topPlayer = Bukkit.getPlayer(topPlayerId);
             if(topPlayer != null) stopPlayerSit(topPlayer, StopReason.PLUGIN, false, true, true);
         }
-        bottomToTopStacks.clear();
-        topToBottomStacks.clear();
+        synchronized(bottomToTopStacks) {
+            bottomToTopStacks.clear();
+            topToBottomStacks.clear();
+        }
         preventDismountStackPlayers.clear();
     }
 
     public boolean sitOnPlayer(Player player, Player target) {
+        if(!gSitMain.isAcceptingOperations()) return false;
         if(!gSitMain.getEntityUtil().isPlayerSitLocationValid(target.getLocation())) return false;
 
         PrePlayerPlayerSitEvent prePlayerPlayerSitEvent = new PrePlayerPlayerSitEvent(player, target);
@@ -64,10 +85,12 @@ public class PlayerSitService {
 
         if(gSitMain.getConfigService().CUSTOM_MESSAGE) gSitMain.getMessageService().sendActionBarMessage(player, "Messages.action-playersit-info");
 
-        bottomToTopStacks.put(target.getUniqueId(), new AbstractMap.SimpleImmutableEntry<>(player.getUniqueId(), playerSitEntityIds));
-        topToBottomStacks.put(player.getUniqueId(), new AbstractMap.SimpleImmutableEntry<>(target.getUniqueId(), playerSitEntityIds));
-        spawnTimes.put(target.getUniqueId().toString() + player.getUniqueId(), System.nanoTime());
-        playerSitCount++;
+        synchronized(bottomToTopStacks) {
+            bottomToTopStacks.put(target.getUniqueId(), new AbstractMap.SimpleImmutableEntry<>(player.getUniqueId(), playerSitEntityIds));
+            topToBottomStacks.put(player.getUniqueId(), new AbstractMap.SimpleImmutableEntry<>(target.getUniqueId(), playerSitEntityIds));
+            spawnTimes.put(target.getUniqueId().toString() + player.getUniqueId(), System.nanoTime());
+            playerSitCount++;
+        }
         Bukkit.getPluginManager().callEvent(new PlayerPlayerSitEvent(player, target));
 
         return true;
@@ -76,8 +99,18 @@ public class PlayerSitService {
     public boolean stopPlayerSit(Player source, StopReason stopReason) { return stopPlayerSit(source, stopReason, true, true, true); }
 
     public boolean stopPlayerSit(Player source, StopReason stopReason, boolean removePassengers, boolean removeVehicle, boolean callPreEvent) {
-        AbstractMap.SimpleImmutableEntry<UUID, List<UUID>> passengers = removePassengers ? bottomToTopStacks.get(source.getUniqueId()) : null;
-        AbstractMap.SimpleImmutableEntry<UUID, List<UUID>> vehicles = removeVehicle ? topToBottomStacks.get(source.getUniqueId()) : null;
+        return stopPlayerSit(source, stopReason, removePassengers, removeVehicle, callPreEvent, true);
+    }
+
+    boolean stopPlayerSitForHotUnload(Player source) { return stopPlayerSit(source, StopReason.PLUGIN, true, false, false, false); }
+
+    private boolean stopPlayerSit(Player source, StopReason stopReason, boolean removePassengers, boolean removeVehicle, boolean callPreEvent, boolean removeEntities) {
+        AbstractMap.SimpleImmutableEntry<UUID, List<UUID>> passengers;
+        AbstractMap.SimpleImmutableEntry<UUID, List<UUID>> vehicles;
+        synchronized(bottomToTopStacks) {
+            passengers = removePassengers ? bottomToTopStacks.get(source.getUniqueId()) : null;
+            vehicles = removeVehicle ? topToBottomStacks.get(source.getUniqueId()) : null;
+        }
         if(passengers == null && vehicles == null) return true;
 
         if(callPreEvent) {
@@ -88,35 +121,37 @@ public class PlayerSitService {
 
         if(passengers != null) {
             source.eject();
-            bottomToTopStacks.remove(source.getUniqueId());
-            topToBottomStacks.remove(passengers.getKey());
-            for(UUID passenger : passengers.getValue()) {
-                Entity passengerEntity = Bukkit.getEntity(passenger);
-                if(passengerEntity == null) continue;
-                gSitMain.getTaskService().run(passengerEntity::remove, passengerEntity);
+            synchronized(bottomToTopStacks) {
+                bottomToTopStacks.remove(source.getUniqueId(), passengers);
+                topToBottomStacks.remove(passengers.getKey());
+                String key = source.getUniqueId().toString() + passengers.getKey();
+                Long spawnTime = spawnTimes.remove(key);
+                if(spawnTime != null) playerSitTime += System.nanoTime() - spawnTime;
             }
-            String key = source.getUniqueId().toString() + passengers.getKey();
-            Long spawnTime = spawnTimes.get(key);
-            if(spawnTime != null) {
-                playerSitTime += System.nanoTime() - spawnTime;
-                spawnTimes.remove(key);
+            if(removeEntities) {
+                for(UUID passenger : passengers.getValue()) {
+                    Entity passengerEntity = Bukkit.getEntity(passenger);
+                    if(passengerEntity == null) continue;
+                    gSitMain.getTaskService().run(passengerEntity::remove, passengerEntity);
+                }
             }
         }
 
         if(vehicles != null) {
             source.leaveVehicle();
-            topToBottomStacks.remove(source.getUniqueId());
-            bottomToTopStacks.remove(vehicles.getKey());
-            for(UUID vehicle : vehicles.getValue()) {
-                Entity vehicleEntity = Bukkit.getEntity(vehicle);
-                if(vehicleEntity == null) continue;
-                gSitMain.getTaskService().run(vehicleEntity::remove, vehicleEntity);
+            synchronized(bottomToTopStacks) {
+                topToBottomStacks.remove(source.getUniqueId(), vehicles);
+                bottomToTopStacks.remove(vehicles.getKey());
+                String key = vehicles.getKey().toString() + source.getUniqueId();
+                Long spawnTime = spawnTimes.remove(key);
+                if(spawnTime != null) playerSitTime += System.nanoTime() - spawnTime;
             }
-            String key = vehicles.getKey().toString() + source.getUniqueId();
-            Long spawnTime = spawnTimes.get(key);
-            if(spawnTime != null) {
-                playerSitTime += System.nanoTime() - spawnTime;
-                spawnTimes.remove(key);
+            if(removeEntities) {
+                for(UUID vehicle : vehicles.getValue()) {
+                    Entity vehicleEntity = Bukkit.getEntity(vehicle);
+                    if(vehicleEntity == null) continue;
+                    gSitMain.getTaskService().run(vehicleEntity::remove, vehicleEntity);
+                }
             }
         }
 
@@ -125,14 +160,16 @@ public class PlayerSitService {
         return true;
     }
 
-    public int getPlayerSitCount() { return this.playerSitCount; }
+    public int getPlayerSitCount() { synchronized(bottomToTopStacks) { return this.playerSitCount; } }
 
-    public int getPlayerSitTime() { return Math.toIntExact(this.playerSitTime / 1_000_000_000); }
+    public int getPlayerSitTime() { synchronized(bottomToTopStacks) { return Math.toIntExact(this.playerSitTime / 1_000_000_000); } }
 
     public void resetPlayerSitStats() {
-        spawnTimes.clear();
-        playerSitCount = 0;
-        playerSitTime = 0;
+        synchronized(bottomToTopStacks) {
+            spawnTimes.clear();
+            playerSitCount = 0;
+            playerSitTime = 0;
+        }
     }
 
 }

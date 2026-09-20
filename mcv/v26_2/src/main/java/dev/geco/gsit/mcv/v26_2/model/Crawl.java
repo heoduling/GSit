@@ -34,7 +34,7 @@ public class Crawl implements dev.geco.gsit.model.Crawl {
     private final Listener listener;
     private final Listener moveListener;
     private final Listener stopListener;
-    private boolean finished = false;
+    private volatile boolean finished = false;
     private final long spawnTime = System.nanoTime();
 
     @SuppressWarnings("deprecation")
@@ -73,6 +73,7 @@ public class Crawl implements dev.geco.gsit.model.Crawl {
         Bukkit.getPluginManager().registerEvents(listener, gSitMain);
 
         gSitMain.getTaskService().runDelayed(() -> {
+            if(finished) return;
             Bukkit.getPluginManager().registerEvents(moveListener, gSitMain);
             if(gSitMain.getConfigService().C_GET_UP_SNEAK) Bukkit.getPluginManager().registerEvents(stopListener, gSitMain);
             tick(player.getLocation());

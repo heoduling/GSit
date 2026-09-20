@@ -44,15 +44,19 @@ public class PoseService {
 
     public HashMap<UUID, Pose> getAllPoses() { return poses; }
 
-    public boolean isPlayerPosing(Player player) { return poses.containsKey(player.getUniqueId()); }
+    public boolean isPlayerPosing(Player player) { synchronized(poses) { return poses.containsKey(player.getUniqueId()); } }
 
-    public Pose getPoseByPlayer(Player player) { return poses.get(player.getUniqueId()); }
+    public Pose getPoseByPlayer(Player player) { synchronized(poses) { return poses.get(player.getUniqueId()); } }
 
-    public void removeAllPoses() { for(Pose pose : new ArrayList<>(poses.values())) removePose(pose, StopReason.PLUGIN); }
+    public java.util.List<Pose> getPosesSnapshot() { synchronized(poses) { return new ArrayList<>(poses.values()); } }
 
-    public boolean isBlockWithPose(Block block) { return blockPoses.containsKey(block); }
+    public boolean hasPoses() { synchronized(poses) { return !poses.isEmpty(); } }
 
-    public Set<Pose> getPosesByBlock(Block block) { return blockPoses.getOrDefault(block, Collections.emptySet()); }
+    public void removeAllPoses() { for(Pose pose : getPosesSnapshot()) removePose(pose, StopReason.PLUGIN); }
+
+    public boolean isBlockWithPose(Block block) { synchronized(blockPoses) { return blockPoses.containsKey(block); } }
+
+    public Set<Pose> getPosesByBlock(Block block) { synchronized(blockPoses) { return new HashSet<>(blockPoses.getOrDefault(block, Collections.emptySet())); } }
 
     public boolean kickPoseEntitiesFromBlock(Block block, Player player) {
         if(!isBlockWithPose(block)) return true;
@@ -64,6 +68,7 @@ public class PoseService {
     public Pose createPose(Block block, Player player, PoseType poseType) { return createPose(block, player, poseType, 0d, 0d, 0d, player.getLocation().getYaw(), gSitMain.getConfigService().CENTER_BLOCK); }
 
     public Pose createPose(Block block, Player player, PoseType poseType, double xOffset, double yOffset, double zOffset, float seatRotation, boolean sitInBlockCenter) {
+        if(!gSitMain.isAcceptingOperations()) return null;
         Location returnLocation = player.getLocation();
         Location seatLocation = gSitMain.getSitService().getSeatLocation(block, returnLocation, xOffset, yOffset, zOffset, sitInBlockCenter);
         if(!gSitMain.getEntityUtil().isSitLocationValid(seatLocation)) return null;
@@ -82,9 +87,9 @@ public class PoseService {
         if(pose == null) return null;
 
         pose.spawn();
-        poses.put(player.getUniqueId(), pose);
-        blockPoses.computeIfAbsent(block, b -> new HashSet<>()).add(pose);
-        poseCount.merge(poseType, 1, Integer::sum);
+        synchronized(poses) { poses.put(player.getUniqueId(), pose); }
+        synchronized(blockPoses) { blockPoses.computeIfAbsent(block, b -> new HashSet<>()).add(pose); }
+        synchronized(poseCount) { poseCount.merge(poseType, 1, Integer::sum); }
         Bukkit.getPluginManager().callEvent(new PlayerPoseEvent(pose));
 
         return pose;
@@ -92,33 +97,47 @@ public class PoseService {
 
     public boolean removePose(Pose pose, StopReason stopReason) { return removePose(pose, stopReason, true); }
 
-    public boolean removePose(Pose pose, StopReason stopReason, boolean useSafeDismount) {
+    public boolean removePose(Pose pose, StopReason stopReason, boolean useSafeDismount) { return removePose(pose, stopReason, useSafeDismount, true); }
+
+    boolean removePoseForHotUnload(Pose pose) { return removePose(pose, StopReason.PLUGIN, true, false); }
+
+    private boolean removePose(Pose pose, StopReason stopReason, boolean useSafeDismount, boolean removeSeatEntity) {
         PrePlayerStopPoseEvent prePlayerStopPoseEvent = new PrePlayerStopPoseEvent(pose, stopReason);
         Bukkit.getPluginManager().callEvent(prePlayerStopPoseEvent);
         if(prePlayerStopPoseEvent.isCancelled() && stopReason.isCancellable()) return false;
 
         Seat seat = pose.getSeat();
         Player player = pose.getPlayer();
-        blockPoses.remove(seat.getBlock());
-        poses.remove(player.getUniqueId());
+        synchronized(blockPoses) {
+            Set<Pose> blockPoseList = blockPoses.get(seat.getBlock());
+            if(blockPoseList != null) {
+                blockPoseList.remove(pose);
+                if(blockPoseList.isEmpty()) blockPoses.remove(seat.getBlock(), blockPoseList);
+            }
+        }
+        synchronized(poses) { poses.remove(player.getUniqueId(), pose); }
         if(useSafeDismount) gSitMain.getSitService().handleSafeSeatDismount(seat);
 
         pose.remove();
-        if(!stopReason.isUsingEntityTask()) seat.getSeatEntity().remove();
-        else gSitMain.getTaskService().run(() -> seat.getSeatEntity().remove(), seat.getSeatEntity());
+        if(removeSeatEntity) {
+            if(!stopReason.isUsingEntityTask()) seat.getSeatEntity().remove();
+            else gSitMain.getTaskService().run(() -> seat.getSeatEntity().remove(), seat.getSeatEntity());
+        }
         Bukkit.getPluginManager().callEvent(new PlayerStopPoseEvent(pose, stopReason));
-        poseTime.merge(pose.getPoseType(), seat.getLifetimeInNanoSeconds(), Long::sum);
+        synchronized(poseCount) { poseTime.merge(pose.getPoseType(), seat.getLifetimeInNanoSeconds(), Long::sum); }
 
         return true;
     }
 
-    public Map<PoseType, Integer> getPoseCount() { return poseCount; }
+    public Map<PoseType, Integer> getPoseCount() { synchronized(poseCount) { return new HashMap<>(poseCount); } }
 
-    public Map<PoseType, Integer> getPoseTime() { return poseTime.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey, e -> Math.toIntExact(e.getValue() / 1_000_000_000))); }
+    public Map<PoseType, Integer> getPoseTime() { synchronized(poseCount) { return poseTime.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey, e -> Math.toIntExact(e.getValue() / 1_000_000_000))); } }
 
     public void resetPoseStats() {
-        poseCount.clear();
-        poseTime.clear();
+        synchronized(poseCount) {
+            poseCount.clear();
+            poseTime.clear();
+        }
     }
 
 }

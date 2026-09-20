@@ -29,6 +29,7 @@ import dev.geco.gsit.model.PoseType;
 import dev.geco.gsit.service.ConfigService;
 import dev.geco.gsit.service.CrawlService;
 import dev.geco.gsit.service.DataService;
+import dev.geco.gsit.service.HotUnloadService;
 import dev.geco.gsit.service.MessageService;
 import dev.geco.gsit.service.PermissionService;
 import dev.geco.gsit.service.PlayerSitService;
@@ -45,13 +46,23 @@ import dev.geco.gsit.util.EnvironmentUtil;
 import dev.geco.gsit.util.LegacyEntityUtil;
 import dev.geco.gsit.util.PassengerUtil;
 import org.bukkit.Bukkit;
+import org.bukkit.command.PluginCommand;
 import org.bukkit.command.CommandSender;
 import org.bukkit.event.Listener;
+import org.bukkit.help.GenericCommandHelpTopic;
+import org.bukkit.help.HelpMap;
+import org.bukkit.help.HelpTopic;
+import org.bukkit.help.IndexHelpTopic;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.yaml.snakeyaml.Yaml;
 
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 public class GSitMain extends JavaPlugin {
 
@@ -71,6 +82,7 @@ public class GSitMain extends JavaPlugin {
     private PoseService poseService;
     private CrawlService crawlService;
     private ToggleService toggleService;
+    private HotUnloadService hotUnloadService;
     private EntityEventHandler entityEventHandler;
     private PacketHandler packetHandler;
     private PassengerUtil passengerUtil;
@@ -84,6 +96,7 @@ public class GSitMain extends JavaPlugin {
     private boolean supportsTaskFeature = false;
     private boolean isPaperServer = false;
     private boolean isFoliaServer = false;
+    private volatile boolean acceptingOperations = false;
 
     public static GSitMain getInstance() { return gSitMain; }
 
@@ -110,6 +123,8 @@ public class GSitMain extends JavaPlugin {
     public CrawlService getCrawlService() { return crawlService; }
 
     public ToggleService getToggleService() { return toggleService; }
+
+    public boolean isAcceptingOperations() { return acceptingOperations; }
 
     public EntityEventHandler getEntityEventHandler() { return entityEventHandler; }
 
@@ -150,6 +165,7 @@ public class GSitMain extends JavaPlugin {
         poseService = new PoseService(this);
         crawlService = new CrawlService(this);
         toggleService = new ToggleService(this);
+        hotUnloadService = new HotUnloadService(this);
 
         entityEventHandler = new EntityEventHandler(this);
 
@@ -164,6 +180,8 @@ public class GSitMain extends JavaPlugin {
     public void onEnable() {
         if(!versionCheck()) return;
 
+        acceptingOperations = true;
+
         packetHandler = versionService.isNewerOrVersion(26, 1) ? (PacketHandler) versionService.getPackageObjectInstance("event.PacketHandler", this) : new LegacyPacketHandler();
         entityUtil = versionService.isNewerOrVersion(1, 18) ? (EntityUtil) versionService.getPackageObjectInstance("util.EntityUtil", this) : new LegacyEntityUtil(this);
 
@@ -171,6 +189,7 @@ public class GSitMain extends JavaPlugin {
         loadSettings(Bukkit.getConsoleSender());
 
         setupCommands();
+        refreshOwnHelpTopics();
         setupEvents();
         setupBStatsMetric();
 
@@ -183,8 +202,10 @@ public class GSitMain extends JavaPlugin {
     }
 
     public void onDisable() {
+        acceptingOperations = false;
         unload();
         if(bStatsMetric != null) bStatsMetric.shutdown();
+        removeOwnHelpTopics();
         messageService.sendMessage(Bukkit.getConsoleSender(), "Plugin.plugin-disabled");
     }
 
@@ -199,6 +220,7 @@ public class GSitMain extends JavaPlugin {
         Bukkit.getPluginManager().callEvent(reloadEvent);
         if(reloadEvent.isCancelled()) return;
 
+        acceptingOperations = false;
         unload();
         configService.reload();
         messageService.loadMessages();
@@ -206,6 +228,8 @@ public class GSitMain extends JavaPlugin {
         loadSettings(sender);
         printPluginLinks(sender);
         updateService.checkForUpdates();
+
+        acceptingOperations = true;
 
         Bukkit.getPluginManager().callEvent(new GSitLoadedEvent(this));
     }
@@ -220,6 +244,23 @@ public class GSitMain extends JavaPlugin {
 
         if(placeholderAPILink != null) placeholderAPILink.unregister();
         if(worldGuardLink != null) worldGuardLink.unregisterFlagHandlers();
+    }
+
+    public void beginHotUnloadDrain() {
+        acceptingOperations = false;
+        if(bStatsMetric != null) bStatsMetric.shutdown();
+    }
+
+    public void finishHotUnloadResources() {
+        dataService.close();
+        if(placeholderAPILink != null) {
+            placeholderAPILink.unregister();
+            placeholderAPILink = null;
+        }
+        if(worldGuardLink != null) {
+            worldGuardLink.unregisterFlagHandlers();
+            worldGuardLink = null;
+        }
     }
 
     private void setupCommands() {
@@ -244,7 +285,36 @@ public class GSitMain extends JavaPlugin {
         getCommand("gsitreload").setPermissionMessage(messageService.getMessage("Messages.command-permission-error"));
     }
 
+    private void refreshOwnHelpTopics() {
+        removeOwnHelpTopics();
+
+        HelpMap helpMap = Bukkit.getHelpMap();
+        List<HelpTopic> topics = new ArrayList<>();
+        for(String name : getDescription().getCommands().keySet()) {
+            PluginCommand command = getCommand(name);
+            if(command == null) continue;
+            HelpTopic topic = new GenericCommandHelpTopic(command);
+            helpMap.addTopic(topic);
+            topics.add(topic);
+        }
+        if(!topics.isEmpty()) helpMap.addTopic(new IndexHelpTopic(NAME, "All commands for " + NAME, null, topics));
+    }
+
+    private void removeOwnHelpTopics() {
+        HelpMap helpMap = Bukkit.getHelpMap();
+        Set<String> commandTopics = new HashSet<>();
+        for(String name : getDescription().getCommands().keySet()) commandTopics.add("/" + name.toLowerCase(Locale.ROOT));
+
+        synchronized(helpMap) {
+            helpMap.getHelpTopics().removeIf(topic -> {
+                String name = topic.getName();
+                return name.equalsIgnoreCase(NAME) || commandTopics.contains(name.toLowerCase(Locale.ROOT));
+            });
+        }
+    }
+
     private void setupEvents() {
+        getServer().getPluginManager().registerEvents(hotUnloadService, this);
         getServer().getPluginManager().registerEvents(new PlayerEventHandler(this), this);
         getServer().getPluginManager().registerEvents(new PlayerSitEventHandler(this), this);
         getServer().getPluginManager().registerEvents(new BlockEventHandler(this), this);

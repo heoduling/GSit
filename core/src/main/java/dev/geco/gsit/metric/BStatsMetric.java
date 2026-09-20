@@ -278,7 +278,9 @@ public class BStatsMetric {
         }
 
         public void shutdown() {
-            scheduler.shutdown();
+            scheduler.shutdownNow();
+            customCharts.clear();
+            collectCallback = null;
         }
 
         public void setCollectCallback(Runnable callback) {
@@ -351,6 +353,8 @@ public class BStatsMetric {
             }
             String url = String.format(REPORT_URL, platform);
             HttpsURLConnection connection = (HttpsURLConnection) new URL(url).openConnection();
+            connection.setConnectTimeout(3_000);
+            connection.setReadTimeout(3_000);
             // Compress the data to save bandwidth
             byte[] compressedData = compress(data.toString());
             connection.setRequestMethod("POST");

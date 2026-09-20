@@ -14,29 +14,31 @@ import dev.geco.gsit.link.worldguard.RegionFlagHandler;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.logging.Level;
 
 public class WorldGuardLink {
 
-    public static final StateFlag SIT_FLAG = new StateFlag("sit", true);
-    public static final StateFlag PLAYERSIT_FLAG = new StateFlag("playersit", true);
-    public static final StateFlag POSE_FLAG = new StateFlag("pose", true);
-    public static final StateFlag CRAWL_FLAG = new StateFlag("crawl", true);
+    public static StateFlag SIT_FLAG = new StateFlag("sit", true);
+    public static StateFlag PLAYERSIT_FLAG = new StateFlag("playersit", true);
+    public static StateFlag POSE_FLAG = new StateFlag("pose", true);
+    public static StateFlag CRAWL_FLAG = new StateFlag("crawl", true);
     public static final String NPC_TAG = "NPC";
 
     public void registerFlags() {
-        HashMap<String, Flag<?>> flags = new HashMap<>();
-        flags.put(SIT_FLAG.getName(), SIT_FLAG);
-        flags.put(PLAYERSIT_FLAG.getName(), PLAYERSIT_FLAG);
-        flags.put(POSE_FLAG.getName(), POSE_FLAG);
-        flags.put(CRAWL_FLAG.getName(), CRAWL_FLAG);
         FlagRegistry flagRegistry = WorldGuard.getInstance().getFlagRegistry();
-        for(Map.Entry<String, Flag<?>> flag : flags.entrySet()) {
-            try {
-                flagRegistry.register(flag.getValue());
-            } catch(Throwable ignored) { }
+        SIT_FLAG = registerOrGet(flagRegistry, SIT_FLAG);
+        PLAYERSIT_FLAG = registerOrGet(flagRegistry, PLAYERSIT_FLAG);
+        POSE_FLAG = registerOrGet(flagRegistry, POSE_FLAG);
+        CRAWL_FLAG = registerOrGet(flagRegistry, CRAWL_FLAG);
+    }
+
+    private StateFlag registerOrGet(FlagRegistry registry, StateFlag flag) {
+        try {
+            registry.register(flag);
+            return flag;
+        } catch(Throwable ignored) {
+            Flag<?> registered = registry.get(flag.getName());
+            return registered instanceof StateFlag stateFlag ? stateFlag : flag;
         }
     }
 

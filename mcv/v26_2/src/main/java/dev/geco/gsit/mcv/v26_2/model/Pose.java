@@ -108,6 +108,7 @@ public class Pose implements dev.geco.gsit.model.Pose {
     private NonNullList<ItemStack> equipmentSlotCache;
     private net.minecraft.world.item.ItemStack mainSlotCache;
     private float directionCache;
+    private volatile boolean finished = false;
     private boolean sleepingIgnoredCache;
     protected int renderRange;
     private final Listener listener;
@@ -248,6 +249,7 @@ public class Pose implements dev.geco.gsit.model.Pose {
         Bukkit.getPluginManager().registerEvents(listener, gSitMain);
 
         ((SeatEntity) ((CraftEntity) seat.getSeatEntity()).getHandle()).setRunnable(() -> {
+            if(finished) return;
             Set<Player> currentNearbyPlayers = getNearbyPlayers();
 
             for(Player nearbyPlayer : currentNearbyPlayers) {
@@ -286,8 +288,10 @@ public class Pose implements dev.geco.gsit.model.Pose {
         sendPacket(player, bundle);
         if(poseType != PoseType.LAY && poseType != PoseType.LEGS_UP) return;
         gSitMain.getTaskService().runDelayed(() -> {
+            if(finished) return;
             sendPacket(player, teleportNpcPacket);
             gSitMain.getTaskService().runDelayed(() -> {
+                if(finished) return;
                 sendPacket(player, teleportNpcPacket);
             }, player, 2);
         }, player, 2);
@@ -295,6 +299,7 @@ public class Pose implements dev.geco.gsit.model.Pose {
 
     @Override
     public void remove() {
+        finished = true;
         ((SeatEntity) ((CraftEntity) seat.getSeatEntity()).getHandle()).setRunnable(null);
 
         HandlerList.unregisterAll(listener);
