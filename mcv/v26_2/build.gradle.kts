@@ -5,6 +5,7 @@ plugins {
 
 dependencies {
     compileOnly(project(":core"))
+    compileOnly(platform("net.kyori:adventure-bom:5.2.0"))
     paperweight.paperDevBundle("26.2.build.+")
 }
 

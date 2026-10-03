@@ -203,7 +203,7 @@ public class GSitMain extends JavaPlugin {
 
     public void onDisable() {
         acceptingOperations = false;
-        unload();
+        unload(!Bukkit.isStopping());
         if(bStatsMetric != null) bStatsMetric.shutdown();
         removeOwnHelpTopics();
         messageService.sendMessage(Bukkit.getConsoleSender(), "Plugin.plugin-disabled");
@@ -221,7 +221,7 @@ public class GSitMain extends JavaPlugin {
         if(reloadEvent.isCancelled()) return;
 
         acceptingOperations = false;
-        unload();
+        unload(true);
         configService.reload();
         messageService.loadMessages();
         loadPluginDependencies();
@@ -234,12 +234,14 @@ public class GSitMain extends JavaPlugin {
         Bukkit.getPluginManager().callEvent(new GSitLoadedEvent(this));
     }
 
-    private void unload() {
+    private void unload(boolean cleanupWorldState) {
         dataService.close();
-        sitService.removeAllSeats();
-        playerSitService.removeAllPlayerSitStacks();
-        poseService.removeAllPoses();
-        crawlService.removeAllCrawls();
+        if(cleanupWorldState) {
+            sitService.removeAllSeats();
+            playerSitService.removeAllPlayerSitStacks();
+            poseService.removeAllPoses();
+            crawlService.removeAllCrawls();
+        }
         packetHandler.removePlayerPacketHandlers();
 
         if(placeholderAPILink != null) placeholderAPILink.unregister();
