@@ -40,15 +40,20 @@ public class BlockEventHandler implements Listener {
     public void blockPistonRetractEvent(BlockPistonRetractEvent event) { handleBlockPistonEvent(event, event.getBlocks()); }
 
     private void handleBlockPistonEvent(BlockPistonEvent event, List<Block> blocks) {
-        Set<Seat> moveList = new HashSet<>();
-        Set<Pose> breakList = new HashSet<>();
+        Set<Seat> moveList = null;
+        Set<Pose> breakList = null;
         for(Block block : blocks) {
-            moveList.addAll(gSitMain.getSitService().getSeatsByBlock(block));
-            if(!gSitMain.getConfigService().GET_UP_BREAK) continue;
-            breakList.addAll(gSitMain.getPoseService().getPosesByBlock(block));
+            if(gSitMain.getSitService().isBlockWithSeat(block)) {
+                if(moveList == null) moveList = new HashSet<>();
+                moveList.addAll(gSitMain.getSitService().getSeatsByBlock(block));
+            }
+            if(gSitMain.getConfigService().GET_UP_BREAK && gSitMain.getPoseService().isBlockWithPose(block)) {
+                if(breakList == null) breakList = new HashSet<>();
+                breakList.addAll(gSitMain.getPoseService().getPosesByBlock(block));
+            }
         }
-        for(Seat seat : moveList) gSitMain.getSitService().moveSeat(seat, event.getDirection());
-        for(Pose pose : breakList) gSitMain.getPoseService().removePose(pose, StopReason.BLOCK_BREAK);
+        if(moveList != null) for(Seat seat : moveList) gSitMain.getSitService().moveSeat(seat, event.getDirection());
+        if(breakList != null) for(Pose pose : breakList) gSitMain.getPoseService().removePose(pose, StopReason.BLOCK_BREAK);
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
